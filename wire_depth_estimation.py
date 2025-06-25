@@ -122,6 +122,98 @@ def extract_row_center_matches(mask0, mask1):
     pts_right = np.array([[kpts1[kpts1[:,1]==y][0][0], y] for y in common_y], dtype=np.float32)
     return pts_left, pts_right
 
+
+def plot_3d_points(points_3d, title="3D Points", max_points=1000):
+    """
+    通用3D点云可视化，xyz轴比例一致
+    """
+    if points_3d.shape[0] > max_points:
+        idx = np.random.choice(points_3d.shape[0], max_points, replace=False)
+        sample = points_3d[idx]
+    else:
+        sample = points_3d
+    x, y, z = sample[:, 0], sample[:, 1], sample[:, 2]
+
+    from mpl_toolkits.mplot3d import Axes3D
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(x, y, z, s=1)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z (Depth)')
+    plt.title(title)
+
+    # 设置xyz轴比例一致
+    max_range = np.array([x.max()-x.min(), y.max()-y.min(), z.max()-z.min()]).max() / 2.0
+    mid_x = (x.max()+x.min()) * 0.5
+    mid_y = (y.max()+y.min()) * 0.5
+    mid_z = (z.max()+z.min()) * 0.5
+    ax.set_xlim(mid_x - max_range, mid_x + max_range)
+    ax.set_ylim(mid_y - max_range, mid_y + max_range)
+    ax.set_zlim(mid_z - max_range, mid_z + max_range)
+
+    plt.show()
+
+
+def visualize_saved_points3d(npy_path):
+    """
+    读取保存的npy文件并进行3D点云可视化，xyz轴比例一致
+    """
+    points_3d = np.load(npy_path)
+    print(f"{npy_path} shape: {points_3d.shape}")
+    print("X min/max:", points_3d[:, 0].min(), points_3d[:, 0].max())
+    print("Y min/max:", points_3d[:, 1].min(), points_3d[:, 1].max())
+    print("Z min/max:", points_3d[:, 2].min(), points_3d[:, 2].max())
+    plot_3d_points(points_3d, title="3D Points from Saved NPY")
+
+
+def visualize_two_saved_points3d(npy_path1, npy_path2, labels=("Points1", "Points2"), colors=("b", "r"), max_points=1000):
+    """
+    同时读取两个npy文件并在同一个3D图中可视化，xyz轴比例一致
+    """
+    points_3d_1 = np.load(npy_path1)
+    points_3d_2 = np.load(npy_path2)
+    # 随机采样
+    if points_3d_1.shape[0] > max_points:
+        idx1 = np.random.choice(points_3d_1.shape[0], max_points, replace=False)
+        sample1 = points_3d_1[idx1]
+    else:
+        sample1 = points_3d_1
+    if points_3d_2.shape[0] > max_points:
+        idx2 = np.random.choice(points_3d_2.shape[0], max_points, replace=False)
+        sample2 = points_3d_2[idx2]
+    else:
+        sample2 = points_3d_2
+
+    x1, y1, z1 = sample1[:, 0], sample1[:, 1], sample1[:, 2]
+    x2, y2, z2 = sample2[:, 0], sample2[:, 1], sample2[:, 2]
+
+    from mpl_toolkits.mplot3d import Axes3D
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(x1, y1, z1, s=2, c=colors[0], label=labels[0], alpha=0.7)
+    ax.scatter(x2, y2, z2, s=5, c=colors[1], label=labels[1], alpha=0.7)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z (Depth)')
+    plt.title('3D Points Comparison')
+    ax.legend()
+
+    # 设置xyz轴比例一致
+    all_x = np.concatenate([x1, x2])
+    all_y = np.concatenate([y1, y2])
+    all_z = np.concatenate([z1, z2])
+    max_range = np.array([all_x.max()-all_x.min(), all_y.max()-all_y.min(), all_z.max()-all_z.min()]).max() / 2.0
+    mid_x = (all_x.max()+all_x.min()) * 0.5
+    mid_y = (all_y.max()+all_y.min()) * 0.5
+    mid_z = (all_z.max()+all_z.min()) * 0.5
+    ax.set_xlim(mid_x - max_range, mid_x + max_range)
+    ax.set_ylim(mid_y - max_range, mid_y + max_range)
+    ax.set_zlim(mid_z - max_range, mid_z + max_range)
+
+    plt.show()
+
+
 def main():
     images = Path("assets")
     os.makedirs("outputs", exist_ok=True)
@@ -192,16 +284,9 @@ def main():
         plt.savefig('outputs/depth_hist.png')
 
         # 点云可视化
-        from mpl_toolkits.mplot3d import Axes3D
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
         valid = np.isfinite(depths) & (depths > 0)
-        ax.scatter(points_3d[valid, 0][:1000], points_3d[valid, 1][:1000], points_3d[valid, 2][:1000], s=1)
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z (Depth)')
-        plt.title('3D Points from Stereo Matching')
-        plt.savefig('outputs/points3d.png')
+        plot_3d_points(points_3d[valid], title="3D Points from Row Center Matching")
+
 
     elif mode == "row_center":
         # --- 行中点特征点模式 ---
@@ -232,6 +317,8 @@ def main():
         points_3d = points_3d_hom[:, :3] / points_3d_hom[:, 3:4]
         depths = points_3d[:, 2]
         print("行中点部分深度值:", depths[:10])
+        # 保存3D点为npy
+        np.save('outputs/row_center_points3d.npy', points_3d[valid])
 
         plt.figure()
         plt.hist(depths[np.isfinite(depths) & (depths > 0)], bins=50, color='royalblue')
@@ -241,30 +328,16 @@ def main():
         plt.savefig('outputs/row_center_depth_hist.png')
 
         # 点云可视化
-        from mpl_toolkits.mplot3d import Axes3D
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
         valid = np.isfinite(depths) & (depths > 0)
-        x = points_3d[valid, 0][:1000]
-        y = points_3d[valid, 1][:1000]
-        z = points_3d[valid, 2][:1000]
-        ax.scatter(x, y, z, s=1)
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z (Depth)')
-        plt.title('3D Points from Row Center Matching')
-        # plt.savefig('outputs/row_center_points3d.png')
+        plot_3d_points(points_3d[valid], title="3D Points from Stereo Matching")
 
-        # 设置xyz轴比例一致
-        max_range = np.array([x.max()-x.min(), y.max()-y.min(), z.max()-z.min()]).max() / 2.0
-        mid_x = (x.max()+x.min()) * 0.5
-        mid_y = (y.max()+y.min()) * 0.5
-        mid_z = (z.max()+z.min()) * 0.5
-        ax.set_xlim(mid_x - max_range, mid_x + max_range)
-        ax.set_ylim(mid_y - max_range, mid_y + max_range)
-        ax.set_zlim(mid_z - max_range, mid_z + max_range)
-
-        plt.show()
 
 if __name__ == "__main__":
-    main()
+    # main()
+    visualize_saved_points3d('outputs/highlight_points.npy')
+    visualize_two_saved_points3d(
+        'outputs/row_center_points3d.npy',
+        'outputs/highlight_points.npy',
+        labels=("Row Center", "Highlight"),
+        colors=("b", "r")
+    )
