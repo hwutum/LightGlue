@@ -11,56 +11,48 @@ from lightglue import viz2d
 
 torch.set_grad_enabled(False)
 
+
 def load_stereo_calib(calib_file):
     with open(calib_file, "r") as f:
         calib = yaml.safe_load(f)
-    return {k: np.array(calib[k]) for k in [
-        'camera_matrix_left', 'dist_coeff_left', 'camera_matrix_right', 'dist_coeff_right',
-        'R', 'T', 'R1', 'R2', 'P1', 'P2', 'Q'
-    ]}
+    return {k: np.array(calib[k]) for k in
+            ['camera_matrix_left', 'dist_coeff_left', 'camera_matrix_right', 'dist_coeff_right',
+             'R', 'T', 'R1', 'R2', 'P1', 'P2', 'Q']}
+
 
 def rectify_image(image, K, D, R, P, size):
     w, h = size
-    K_cv, D_cv, R_cv, P_cv = K.astype(np.float32), D.astype(np.float32), R.astype(np.float32), P.astype(np.float32)
+    K_cv, D_cv, R_cv, P_cv = map(np.float32, [K, D, R, P])
     img_np = image.squeeze(0).cpu().numpy()
-    if img_np.max() <= 1.0:
-        img_np = (img_np * 255).astype(np.uint8)
-    else:
-        img_np = img_np.astype(np.uint8)
-    if img_np.ndim == 3 and img_np.shape[0] == 1:
-        img_np = img_np[0]
-    elif img_np.ndim == 3:
-        img_np = np.moveaxis(img_np, 0, -1)
+    img_np = (img_np * 255).astype(np.uint8) if img_np.max() <= 1.0 else img_np.astype(np.uint8)
+    img_np = img_np[0] if img_np.ndim == 3 and img_np.shape[0] == 1 else (
+        np.moveaxis(img_np, 0, -1) if img_np.ndim == 3 else img_np)
     map1, map2 = cv2.initUndistortRectifyMap(K_cv, D_cv, R_cv, P_cv, (w, h), cv2.CV_32FC1)
     rectified = cv2.remap(img_np, map1, map2, interpolation=cv2.INTER_LINEAR)
-    if rectified.ndim == 2:
-        rectified = rectified[None, ...]
-    elif rectified.ndim == 3:
-        rectified = np.moveaxis(rectified, -1, 0)
-    rectified = rectified.astype(np.float32) / 255.0
+    rectified = rectified[None, ...] if rectified.ndim == 2 else (
+        np.moveaxis(rectified, -1, 0) if rectified.ndim == 3 else rectified)
+    rectified = (rectified.astype(np.float32) / 255.0)
     return torch.from_numpy(rectified).unsqueeze(0)
+
 
 def to_numpy_img(img_tensor):
     img = img_tensor.squeeze(0).cpu().numpy()
-    if img.shape[0] == 1:
-        img = img[0]
-    else:
-        img = np.moveaxis(img, 0, -1)
+    img = img[0] if img.shape[0] == 1 else np.moveaxis(img, 0, -1)
     img = np.clip(img * 255, 0, 255).astype(np.uint8)
     return img
 
+
 def load_mask(path):
     mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-    mask = mask.astype(np.float32) / 255.0
-    mask = torch.from_numpy(mask).unsqueeze(0).unsqueeze(0)
-    return mask
+    return torch.from_numpy(mask.astype(np.float32) / 255.0).unsqueeze(0).unsqueeze(0)
+
 
 def filter_keypoints_by_mask(kpts, mask_np):
-    if isinstance(kpts, torch.Tensor):
-        kpts = kpts.cpu().numpy()
-    ys = np.clip(np.round(kpts[:, 1]).astype(int), 0, mask_np.shape[0] - 1)
-    xs = np.clip(np.round(kpts[:, 0]).astype(int), 0, mask_np.shape[1] - 1)
+    kpts = kpts.cpu().numpy() if isinstance(kpts, torch.Tensor) else kpts
+    ys = np.clip(np.round(kpts[:, 1]).astype(int), 0, mask_np.shape[0] - 1)  # y coordinate
+    xs = np.clip(np.round(kpts[:, 0]).astype(int), 0, mask_np.shape[1] - 1)  # x coordinate
     return mask_np[ys, xs] > 0.5
+
 
 def filter_feats_by_mask(feats, keep):
     for k in ["keypoints", "descriptors", "scores", "scales"]:
@@ -68,16 +60,12 @@ def filter_feats_by_mask(feats, keep):
             arr = feats[k]
             if isinstance(arr, torch.Tensor):
                 arr = arr.squeeze(0) if arr.dim() == 3 else arr
-                arr = arr[keep]
-                if arr.dim() == 2:
-                    arr = arr[None, ...]
-                feats[k] = arr
+                feats[k] = arr[keep].unsqueeze(0) if arr.dim() == 2 else arr[keep]
             elif isinstance(arr, np.ndarray):
-                arr = arr[keep]
-                arr = torch.from_numpy(arr).to(arr.device if hasattr(arr, 'device') else 'cpu')
-                if arr.dim() == 2:
-                    arr = arr[None, ...]
-                feats[k] = arr
+                device = getattr(arr, 'device', 'cpu')
+                feats[k] = torch.from_numpy(arr[keep]).to(device)
+                if feats[k].dim() == 2:
+                    feats[k] = feats[k].unsqueeze(0)
     return feats
 
 def extract_and_filter_features(image, mask, extractor, device):
@@ -94,6 +82,7 @@ def extract_and_filter_features(image, mask, extractor, device):
     feats = filter_feats_by_mask(feats, keep)
     return feats, kpts, keep
 
+
 def extract_row_center_keypoints(mask):
     """
     对掩码mask，返回每一行掩码为1区域的中点像素坐标 (N,2)，格式为[[x, y], ...]
@@ -108,19 +97,22 @@ def extract_row_center_keypoints(mask):
             keypoints.append([x_center, y])
     return np.array(keypoints, dtype=np.float32)  # (N, 2)
 
+
 def extract_row_center_matches(mask0, mask1):
     """
     对左右掩码，返回匹配点对 (pts_left, pts_right)，y相同
     """
-    kpts0 = extract_row_center_keypoints(mask0)
-    kpts1 = extract_row_center_keypoints(mask1)
-    # 只保留y都存在的行
-    y0 = set(kpts0[:,1].astype(int))
-    y1 = set(kpts1[:,1].astype(int))
-    common_y = sorted(list(y0 & y1))
-    pts_left = np.array([[kpts0[kpts0[:,1]==y][0][0], y] for y in common_y], dtype=np.float32)
-    pts_right = np.array([[kpts1[kpts1[:,1]==y][0][0], y] for y in common_y], dtype=np.float32)
+    kpts0 = extract_row_center_keypoints(mask0)  # keypoints in left image
+    kpts1 = extract_row_center_keypoints(mask1)  # keypoints in right image
+
+    y0 = set(kpts0[:, 1].astype(int))  # y coordinates in left image
+    y1 = set(kpts1[:, 1].astype(int))  # y coordinates in right image
+    common_y = sorted(list(y0 & y1))  # common y coordinates
+
+    pts_left = np.array([[kpts0[kpts0[:, 1] == y][0][0], y] for y in common_y], dtype=np.float32)
+    pts_right = np.array([[kpts1[kpts1[:, 1] == y][0][0], y] for y in common_y], dtype=np.float32)
     return pts_left, pts_right
+
 
 
 def plot_3d_points(points_3d, title="3D Points", max_points=1000):
@@ -134,17 +126,17 @@ def plot_3d_points(points_3d, title="3D Points", max_points=1000):
         sample = points_3d
     x, y, z = sample[:, 0], sample[:, 1], sample[:, 2]
 
-    from mpl_toolkits.mplot3d import Axes3D
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(x, y, z, s=1)
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z (Depth)')
-    plt.title(title)
+    fig = plt.figure()  # Create a new figure
+    ax = fig.add_subplot(111, projection='3d')  # Add a 3D subplot
+    ax.scatter(x, y, z, s=1)  # Scatter plot of 3D points
+    ax.set_xlabel('X')  # Label for x-axis
+    ax.set_ylabel('Y')  # Label for y-axis
+    ax.set_zlabel('Z (Depth)')  # Label for z-axis
+    plt.title(title)  # Set plot title
 
     # 设置xyz轴比例一致
-    max_range = np.array([x.max()-x.min(), y.max()-y.min(), z.max()-z.min()]).max() / 2.0
+    ranges = [v.max() - v.min() for v in [x, y, z]]  # Range of each dimension
+    max_range = max(ranges) / 2.0  # Max range for equal aspect ratio
     mid_x = (x.max()+x.min()) * 0.5
     mid_y = (y.max()+y.min()) * 0.5
     mid_z = (z.max()+z.min()) * 0.5
@@ -158,9 +150,9 @@ def plot_3d_points(points_3d, title="3D Points", max_points=1000):
 def visualize_saved_points3d(npy_path):
     """
     读取保存的npy文件并进行3D点云可视化，xyz轴比例一致
-    """
-    points_3d = np.load(npy_path)
-    print(f"{npy_path} shape: {points_3d.shape}")
+    """  
+    points_3d = np.load(npy_path)  # Load 3D points from npy file
+    print(f"{npy_path} shape: {points_3d.shape}")  # Print the shape of loaded points
     print("X min/max:", points_3d[:, 0].min(), points_3d[:, 0].max())
     print("Y min/max:", points_3d[:, 1].min(), points_3d[:, 1].max())
     print("Z min/max:", points_3d[:, 2].min(), points_3d[:, 2].max())
@@ -318,6 +310,7 @@ def main():
         depths = points_3d[:, 2]
         print("行中点部分深度值:", depths[:10])
         # 保存3D点为npy
+        valid = np.isfinite(depths) & (depths > 0)
         np.save('outputs/row_center_points3d.npy', points_3d[valid])
 
         plt.figure()
@@ -333,7 +326,7 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
+    main()
     visualize_saved_points3d('outputs/highlight_points.npy')
     visualize_two_saved_points3d(
         'outputs/row_center_points3d.npy',
